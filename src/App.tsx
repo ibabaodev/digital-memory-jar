@@ -7,6 +7,9 @@ type ApiResult<T> = { message?: string; memories?: T[]; memory?: T }
 const colors = ['#f4c7cf', '#f8df9b', '#c7dced', '#d8c8eb', '#d0e3c8']
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '')
 const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined
+const TOKEN_KEY = 'digital-memory-jar-google-session'
+const getSavedToken = () => { try { return sessionStorage.getItem(TOKEN_KEY) || '' } catch { return '' } }
+const saveToken = (token: string) => { try { if (token) sessionStorage.setItem(TOKEN_KEY, token); else sessionStorage.removeItem(TOKEN_KEY) } catch { /* Storage may be disabled; sign-in still works for this page load. */ } }
 declare global { interface Window { google?: { accounts: { id: { initialize: (options: { client_id: string; callback: (response: { credential?: string }) => void }) => void; renderButton: (element: HTMLElement, options: { theme: string; size: string; shape: string; text: string }) => void } } } } }
 const today = () => new Date().toISOString().slice(0, 10)
 
@@ -23,7 +26,7 @@ async function request<T>(token: string, path: string, method = 'GET', body?: un
 }
 
 function App() {
-  const [token, setToken] = useState('')
+  const [token, setToken] = useState(getSavedToken)
   const [memories, setMemories] = useState<Memory[]>([])
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -37,7 +40,12 @@ function App() {
   const loadMemories = useCallback(async (auth: string) => {
     setLoading(true); setError('')
     try { const data = await request<ApiResult<Memory>>(auth, '/memories'); setMemories(data.memories || []) }
-    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not load memories.') }
+    catch (cause) {
+      if (cause instanceof Error && cause.message === 'Your Google session expired. Sign in again.') {
+        saveToken(''); setToken(''); setMemories([])
+      }
+      setError(cause instanceof Error ? cause.message : 'Could not load memories.')
+    }
     finally { setLoading(false) }
   }, [])
   useEffect(() => { if (token) void loadMemories(token) }, [token, loadMemories])
@@ -47,7 +55,7 @@ function App() {
     const initialize = () => {
       if (cancelled || !window.google || !signInButton.current) return
       window.google.accounts.id.initialize({ client_id: googleClientId, callback: response => {
-        if (response.credential) { setToken(response.credential); setError('') }
+        if (response.credential) { saveToken(response.credential); setToken(response.credential); setError('') }
         else setError('Google sign-in did not return an ID token.')
       } })
       window.google.accounts.id.renderButton(signInButton.current, { theme: 'outline', size: 'large', shape: 'pill', text: 'signin_with' })
@@ -58,7 +66,7 @@ function App() {
     else { const script = document.createElement('script'); script.src = 'https://accounts.google.com/gsi/client'; script.async = true; script.defer = true; script.dataset.googleIdentity = 'true'; script.addEventListener('load', initialize, { once: true }); script.addEventListener('error', () => setError('Could not load Google sign-in. Check your connection.'), { once: true }); document.head.appendChild(script) }
     return () => { cancelled = true }
   }, [token])
-  const signOut = () => { setToken(''); setMemories([]); setError(''); setReveal(null); setDrawer(false) }
+  const signOut = () => { saveToken(''); setToken(''); setMemories([]); setError(''); setReveal(null); setDrawer(false) }
   const open = (memory?: Memory) => { setEditing(memory || null); setText(memory?.text || ''); setDate(memory?.date || today()); setForm(true) }
   async function save(event: FormEvent) {
     event.preventDefault(); const value = text.trim(); if (!value || !token) return
